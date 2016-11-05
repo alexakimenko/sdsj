@@ -99,16 +99,14 @@ trans_w_g$tr_type_parsed<-ifelse(trans_w_g$amount > 0 & trans_w_g$tr_type %in% c
 trans_w_g$amount_norm<-(trans_w_g$amount-mean(trans_w_g$amount))/sd(trans_w_g$amount)
 #write.csv(trans_w_g,"output/task1/trans_w_g.csv")
 trans_w_g<-fread("output/task1/trans_w_g.csv")
-predictor_cols<-names(trans_w_g)[!(names(trans_w_g) %in% c("customer_id","V1","tr_type","tr_datetime","term_id","amount","tr_type_new",
-                                                           "direction","amount_real","date","gender","mcc_code_new"))]
 flowers<-trans_w_g[mcc_code=="5992" & (date==as.Date('2015/2/14') | date==as.Date('2015/3/8')) & direction == "outbound",.(flowers_amnt=sum(amount),flowers_num=.N),by=.(customer_id)]
 
 X_train_<-trans_w_g[is.na(gender)==F,]
 X_test<-trans_w_g[is.na(gender)==T,]
-sample_flag<-sample(1:nrow(X_train),nrow(X_train)*0.7)
+sample_flag<-sample(1:nrow(X_train_),nrow(X_train_)*0.7)
 X_train<-X_train_[sample_flag,]
 X_holdout<-X_train_[-sample_flag,]
-global_mean<-mean(X_train$gender)
+global_mean<-mean(X_train_$gender)
 for (C in c(10,5)){
   mcc_codes_y<-X_train[,.(regul_mean=(mean(gender)*.N+global_mean*C)/(.N+C),mean=mean(gender)),by=.(mcc_code)]
   mcc_codes_holdout<-X_holdout[,.(mean=mean(gender)),by=.(mcc_code)]
@@ -119,6 +117,9 @@ for (C in c(10,5)){
 }
 C=10
 mcc_codes_y<-X_train[,.(regul_mean=(mean(gender)*.N+global_mean*C)/(.N+C),mean=mean(gender)),by=.(mcc_code)]
+cm_mcc_codes_y<-merge(trans_w_g[,.(.N),by=.(customer_id,mcc_code)],mcc_codes_y,by="mcc_code")
+cm_mcc_codes_y$weight<-cm_mcc_codes_y$regul_mean*cm_mcc_codes_y$N
+cm_mcc<-cm_mcc_codes_y[,.(mcc_code_weight_y=sum(weight)/sum(N),mcc_code_mean_y=mean(regul_mean),mcc_code_max_y=max(regul_mean),mcc_code_min_y=min(regul_mean)),by=.(customer_id)]
 
 for (C in c(10,5,20,40,60,100)){
   tr_types_y<-X_train[,.(regul_mean=(mean(gender)*.N+global_mean*C)/(.N+C),mean=mean(gender)),by=.(tr_type)]
@@ -130,26 +131,29 @@ for (C in c(10,5,20,40,60,100)){
 }
 C=10
 tr_types_y<-X_train[,.(regul_mean=(mean(gender)*.N+global_mean*C)/(.N+C),mean=mean(gender)),by=.(tr_type)]
-
-
-
+cm_tr_types<-merge(trans_w_g[,.(.N),by=.(customer_id,tr_type)],tr_types_y,by="tr_type")
+cm_tr_types$weight<-cm_tr_types$regul_mean*cm_tr_types$N
+cm_tr<-cm_tr_types[,.(tr_code_weight_y=sum(weight)/sum(N),tr_code_mean_y=mean(regul_mean),tr_code_max_y=max(regul_mean),tr_code_min_y=min(regul_mean)),by=.(customer_id)]
+X_trans<-merge(cm_mcc,cm_tr,by="customer_id",all=T)
+X_trans<-merge(X_trans,flowers,by="customer_id",all=T)
+X_trans[is.na(X_trans)]<-0
 
 ### model 2 - base ###
 
 cm_base<-trans_w_g[,.(weekday=mean(weekday)),
-                      by=.(customer_id)]
+                   by=.(customer_id)]
 cm_tr_types<-trans_w_g[,.(.N),
-                          by=.(customer_id,tr_type_parsed)]
+                       by=.(customer_id,tr_type_parsed)]
 cm_tr_types_c<-dcast(cm_tr_types,customer_id~tr_type_parsed,value.var="N")
 cm_tr_types_c[is.na(cm_tr_types_c)]<-0
 cm_tr_types_c<-merge(cm_tr_types_c,cm_base,by="customer_id")
 cm_mcc<-trans_w_g[,.(.N),
-                     by=.(customer_id,mcc_code)]
+                  by=.(customer_id,mcc_code)]
 cm_mcc$variable<-paste0("mcc_code_",cm_mcc$mcc_code)
 cm_mcc_c<-dcast(cm_mcc,customer_id~variable,value.var = "N")
 cm_mcc_c[is.na(cm_mcc_c)]<-0
-total<-merge(cm_mcc_c,cm_tr_types_c,by="customer_id",all.x = TRUE)
-total<-merge(total,gender,by="customer_id",all.x = TRUE)
+X_base<-merge(cm_mcc_c,cm_tr_types_c,by="customer_id",all.x = TRUE)
+X_base<-merge(X_base,gender,by="customer_id",all.x = TRUE)
 # predictor_cols<-colnames(total)[!(colnames(total) %in% c("customer_id","gender"))]
 # X_train<-total[is.na(total$gender)==F,]
 # X_test<-total[is.na(total$gender)==T,]
@@ -180,9 +184,9 @@ total<-merge(total,gender,by="customer_id",all.x = TRUE)
 ### model 3 - relative numbers ###
 
 cm_base_for_mcc<-trans_w_g[,.(.N,sum_amnt=sum(amount)),
-                              by=.(customer_id,direction)]
+                           by=.(customer_id,direction)]
 cm_mcc<-trans_w_g[,.(.N,sum_amnt=sum(amount)),
-                     by=.(customer_id,mcc_code,direction)]
+                  by=.(customer_id,mcc_code,direction)]
 cm_mcc<-merge(cm_mcc,cm_base_for_mcc,by=c("customer_id","direction"))
 cm_mcc$share_n<-cm_mcc$N.x/cm_mcc$N.y
 cm_mcc$share_amnt<-cm_mcc$sum_amnt.x/cm_mcc$sum_amnt.y
@@ -194,7 +198,8 @@ cm_mcc_m<-melt(cm_mcc,id=c("customer_id","mcc_code","direction"))
 cm_mcc_m$var_name<-paste(cm_mcc_m$mcc_code,cm_mcc_m$direction,cm_mcc_m$variable,sep="_")
 cm_mcc_c<-dcast(cm_mcc_m,customer_id~var_name)
 cm_mcc_c[is.na(cm_mcc_c)]<-0
-total<-merge(cm_mcc_c,gender,by="customer_id",all.x = TRUE)
+X_relat<-cm_mcc_c
+# X_relat<-merge(cm_mcc_c,gender,by="customer_id",all.x = TRUE)
 # predictor_cols<-colnames(total)[!(colnames(total) %in% c("customer_id","gender"))]
 # 
 # X_train<-total[is.na(total$gender)==F,]
@@ -228,60 +233,66 @@ total<-merge(cm_mcc_c,gender,by="customer_id",all.x = TRUE)
 
 ### merging 3 datasets ###
 
-X_total_train<-merge(X_relat_train,X_train_trans,by="customer_id")
-X_total_train<-merge(X_total_train,X_base_train,by="customer_id")
-X_total_test<-merge(X_relat_test,X_test_trans,by="customer_id")
-X_total_test<-merge(X_total_test,X_base_test,by="customer_id")
-predictor_cols<-colnames(X_total_train)[!(colnames(X_total_train) %in% c("customer_id","gender","gender.x","gender.y"))]
-X_train_mx<-get_matrix(X_total_train[,predictor_cols,with=F])
-X_test_mx<-get_matrix(X_total_test[,predictor_cols,with=F])
-X_strain_mx[is.na(X_train_mx)]<-0
-X_test_mx[is.na(X_test_mx)]<-0
-xgbMatrix <- xgb.DMatrix(data=X_train_mx, 
-                         label = X_total_train$gender.x)
+X_total<-merge(X_trans,X_base,by="customer_id")
+X_total<-merge(X_total,X_relat,by="customer_id")
+names(X_total)[names(X_total)=="взнос ATM"]<-"ATM"
+names(X_total)[names(X_total)=="выдача наличных"]<-"cash"
+names(X_total)[names(X_total)=="перевод на карту"]<-"card_transfer"
+names(X_total)[names(X_total)=="покупка"]<-"purchase"
+names(X_total)[names(X_total)=="пополнение с карты"]<-"inbound_from_card"
+X_train_<-X_total[is.na(gender)==F]
+X_test<-X_total[is.na(gender)==T]
+sample_flag<-sample(1:nrow(X_train_),0.7*nrow(X_train_))
+X_train<-X_train_[sample_flag,]
+zero_sd<-names(X_train)[apply(X_train,2,sd)==0]
+X_holdout<-X_train_[-sample_flag,]
+predictor_cols<-colnames(X_total)[!(colnames(X_total) %in% c(zero_sd,"customer_id","gender","gender.x","gender.y"))]
+X_train_mx<-get_matrix(X_train[,predictor_cols,with=F])
+X_holdout_mx<-get_matrix(X_holdout[,predictor_cols,with=F])
+X_test_mx<-get_matrix(X_test[,predictor_cols,with=F])
 
-param1 <- list("objective" = "binary:logistic", 
-               "eval_metric" = "auc", 
-               "max_depth" = 3, 
+param1 <- list("objective" = "binary:logistic",
+               "eval_metric" = "auc",
+               "max_depth" = 3,
                "eta" = 0.05,
-               "subsample"=1.0, 
+               "subsample"=1.0,
                "min_weight_fraction_leaf"=0,
-               "min_samples_split"= 2)
-cv_xgboost <- xgb.cv(data=xgbMatrix,
-                     nfold = 5, maximize = FALSE, 
-                     nrounds = 100, params=param1)
-fit_xgboost <- xgboost(data=xgbMatrix,maximize = FALSE,
+               "min_samples_split"= 2,
+               "col_bytree"=0.3)
+fit_xgboost <- xgboost(data=X_train_mx,label=X_train$gender,maximize = FALSE,
                        nrounds = 100, params=param1)
-
-predictor_cols2<-xgb.importance(feature_names = colnames(X_train_mx), filename_dump = NULL, model = fit_xgboost)$Feature[1:30]
-
-X_train_mx<-get_matrix(X_total_train[,predictor_cols2,with=F])
-X_test_mx<-get_matrix(X_total_test[,predictor_cols2,with=F])
-X_train_mx[is.na(X_train_mx)]<-0
-X_test_mx[is.na(X_test_mx)]<-0
-xgbMatrix <- xgb.DMatrix(data=X_train_mx, 
-                         label = X_total_train$gender)
-
-summary<-data.table()
-for (e in c(0.01, 0,05, 0.1)){
-  for (max_depth in c(2, 3, 4)){
-    for (min_c_w in c(30,60)){
-      col_bytree=0.3
-      param1 <- list("objective" = "binary:logistic", 
-                     "eval_metric" = "auc", 
-                     "max_depth" = max_depth, 
-                     "eta" = e,
-                     "min_child_weight" = min_c_w,
-                     "colsample_bytree"=col_bytree)
-      cv_xgboost <- xgb.cv(data=xgbMatrix,
-                           nfold = 5, maximize = FALSE, 
-                           nrounds = 100, params=param1)
-      out_i<-data.frame(model=paste0("XGBoost (eta=",e,", max_depth=",max_depth,", colsample_bytree=",col_bytree,
-                                     ", min_child_weight=",min_c_w,")"),
-                        error_train=tail(cv_xgboost$train.auc.mean,1),
-                        error_test=tail(cv_xgboost$test.auc.mean,1),
-                        diff=tail(cv_xgboost$train.auc.mean,1)-tail(cv_xgboost$test.auc.mean,1))
-      summary<-rbind(summary,out_i)
+importance_cols<-xgb.importance(feature_names = colnames(X_train_mx), filename_dump = NULL, model = fit_xgboost)$Feature
+length(importance_cols)
+summary_gender<-data.table()
+for (ncols in c(0.5,0.8,1)){
+  X_train_mx<-get_matrix(X_train[,importance_cols[1:(length(importance_cols)*ncols)],with=F])
+  X_holdout_mx<-get_matrix(X_holdout[,importance_cols[1:(length(importance_cols)*ncols)],with=F])
+  for (e in c(0.01, 0,05, 0.1)){
+    for (max_depth in c(2, 3, 4)){
+      for (min_c_w in c(30,60)){
+        col_bytree=0.3
+        param1 <- list("objective" = "binary:logistic", 
+                       "eval_metric" = "auc", 
+                       "max_depth" = max_depth, 
+                       "eta" = e,
+                       "min_child_weight" = min_c_w,
+                       "min_weight_fraction_leaf"=0,
+                       "min_samples_split"= 2,
+                       "colsample_bytree"=col_bytree)
+        
+        cv_xgboost <- xgb.cv(data=X_train_mx,label=X_train$gender,
+                             nfold = 5, maximize = FALSE, 
+                             nrounds = 100, params=param1)
+        fit_xgboost <- xgboost(data=X_train_mx,label=X_train$gender,maximize = FALSE,
+                               nrounds = 100, params=param1)
+        y_pred<-predict(fit_xgboost,X_holdout_mx)
+        out_i<-data.frame(model=paste0("XGBoost ", ncol(X_train_mx),"vars (eta=",e,", max_depth=",max_depth,", colsample_bytree=",col_bytree,
+                                       ", min_child_weight=",min_c_w,")"),
+                          error_train=tail(cv_xgboost$train.auc.mean,1),
+                          error_test=tail(cv_xgboost$test.auc.mean,1),
+                          error_holdout=auc(X_holdout$gender,y_pred))
+        summary_gender<-rbind(summary_gender,out_i)
+      }
     }
   }  
 }
@@ -301,4 +312,3 @@ y_pred<-predict(fit_xgboost,X_test_mx)
 
 submission<-data.table(customer_id=X_test$customer_id,gender=y_pred)
 write.csv(submission, 'output/task1/submission_mambo_jambo.csv', row.names = F,quote = F)
-
